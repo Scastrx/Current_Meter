@@ -1,0 +1,140 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebSocketsServer.h>
+#include <SPI.h>
+
+// Pines principales
+#define ATN_MA        25  // Entrada digital: micro/miliamperios
+#define MODE_AUTO     27  // Entrada digital: modo auto/manual
+#define DRDY          32  // Datos listos ADS1242
+#define CS             5  // Chip Select SPI
+#define SCLK          18
+#define MISO          19
+#define MOSI          23
+
+// Pines adicionales
+#define CONTROL      4  // Salida digital de control
+#define BOTON_ENCENDIDO 0  // Botón físico
+#define PIN_ENCENDIDO 12  // Salida digital para encender/apagar
+
+// Nuevas salidas digitales de estado
+#define MICRO_OUT     13  // Alta si se mide en microamperios
+#define MILI_OUT      14  // Alta si se mide en miliamperios
+#define MODE_STATE_OUT 15 // Alta si está en modo automático
+
+// Variables de estado
+bool estadoEncendido = false;
+bool botonAnterior = HIGH;
+
+// Umbrales para modo automático
+#define UMBRAL_1  2.5
+#define UMBRAL_2  0.5
+
+// WiFi
+const char* ssid = "TuSSID";
+const char* password = "TuPassword";
+WebSocketsServer webSocket(81);
+
+void setup() {
+    Serial.begin(115200);
+
+    // Entradas
+    pinMode(ATN_MA, INPUT);
+    pinMode(MODE_AUTO, INPUT);
+    pinMode(DRDY, INPUT);
+    pinMode(BOTON_ENCENDIDO, INPUT_PULLUP);
+
+    // Salidas
+    pinMode(CS, OUTPUT);
+    pinMode(PIN_ENCENDIDO, OUTPUT);
+    pinMode(CONTROL, OUTPUT);
+    pinMode(MICRO_OUT, OUTPUT);
+    pinMode(MILI_OUT, OUTPUT);
+    pinMode(MODE_STATE_OUT, OUTPUT);
+
+    digitalWrite(CS, HIGH);
+    digitalWrite(PIN_ENCENDIDO, LOW); // Circuito apagado por defecto
+
+    SPI.begin(SCLK, MISO, MOSI);
+
+    // WiFi
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nConectado a WiFi");
+
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+}
+
+void loop() {
+    webSocket.loop();
+
+    // Botón de encendido
+    bool botonEstado = digitalRead(BOTON_ENCENDIDO);
+    if (botonAnterior == HIGH && botonEstado == LOW) {
+        estadoEncendido = !estadoEncendido;
+        digitalWrite(PIN_ENCENDIDO, estadoEncendido ? HIGH : LOW);
+    }
+    botonAnterior = botonEstado;
+
+    // Reflejar estado de ATN_MA en salida digital
+    digitalWrite(CONTROL, digitalRead(ATN_MA));
+
+    // Leer ADC si está listo
+    if (digitalRead(DRDY) == LOW) {
+        float vout = leerADS1242();
+        bool autoMode = digitalRead(MODE_AUTO);
+        bool modo_mA;
+
+        // Actualizar salida digital para estado de modo
+        digitalWrite(MODE_STATE_OUT, autoMode);
+
+        if (autoMode) {
+            if (vout > UMBRAL_1) {
+                modo_mA = true;
+            } else if (vout < UMBRAL_2) {
+                modo_mA = false;
+            }
+        } else {
+            modo_mA = digitalRead(ATN_MA);
+        }
+
+        // Actualizar salidas para indicar rango
+        digitalWrite(MILI_OUT, modo_mA ? HIGH : LOW);
+        digitalWrite(MICRO_OUT, modo_mA ? LOW : HIGH);
+
+        // Calcular corriente
+        float corriente = modo_mA ? (vout / (100 * 0.01)) : (vout / (100 * 10));
+        enviarDatos(corriente, modo_mA, autoMode);
+    }
+}
+
+float leerADS1242() {
+    digitalWrite(CS, LOW);
+    delayMicroseconds(10);
+    uint8_t msb = SPI.transfer(0x00);
+    uint8_t mid = SPI.transfer(0x00);
+    uint8_t lsb = SPI.transfer(0x00);
+    digitalWrite(CS, HIGH);
+
+    int32_t raw = ((int32_t)msb << 16) | ((int32_t)mid << 8) | lsb;
+    if (raw & 0x800000) raw |= 0xFF000000;
+    return raw * (3.3 / 8388608.0);
+}
+
+void enviarDatos(float corriente, bool modo_mA, bool autoMode) {
+    String mensaje = "{";
+    mensaje += "\"current\":" + String(corriente, 3) + ",";
+    mensaje += "\"unit\":\"" + String(modo_mA ? "mA" : "uA") + "\",";
+    mensaje += "\"mode\":\"" + String(autoMode ? "Automatic" : "Manual") + "\"}";
+    webSocket.broadcastTXT(mensaje);
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+    if (type == WStype_CONNECTED) {
+        Serial.println("Cliente conectado");
+    }
+}

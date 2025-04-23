@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Current Measurement</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #2a2a2a;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 400px;
+            margin: auto;
+            background: #333;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0px 0px 15px rgba(255, 255, 255, 0.2);
+        }
+        .value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .mode {
+            font-size: 1.2em;
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            display: inline-block;
+            background-color: #007BFF;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Current Measurement</h1>
+        <p class="value" id="current">0.000</p>
+        <p id="unit">uA</p>
+        <p id="mode" class="mode">Mode: Manual</p>
+    </div>
+    
+    <script>
+        var socket = new WebSocket("ws://" + window.location.hostname + ":81/");
+        
+        socket.onmessage = function(event) {
+            var data = JSON.parse(event.data);
+            document.getElementById("current").innerText = data.current.toFixed(3);
+            document.getElementById("unit").innerText = data.unit;
+            
+            var modeElement = document.getElementById("mode");
+            modeElement.innerText = "Modo: " + data.mode;
+        };
+    </script>
+</body>
+</html>
